@@ -31,7 +31,7 @@ def read_video(vid_path):
     print('read {} frames fromn video'.format(len(frames)))
     return frames
 
-debug = False
+debug = True
 
 def euclidean_distance(point1, point2):
     assert (isinstance(point1, list) or isinstance(point1, np.ndarray)) and (isinstance(point2, list) or isinstance(point2, np.ndarray))
@@ -63,8 +63,21 @@ def reflection_of_point(point, line_point1, line_point2):#takes point, line_poin
     reflection_point = reflection_point.astype(int)
     return reflection_point
 
-def estimate_other_2_points(curr_2_points):
-    #returns the estimated point as rownumber, columnnumber
+def order_CW(point1, point2, point3, point4, midpoint):#points are in XY coordinates (not row, column numbers)
+    # returns points in coord system as well
+    angle1 = atan2(point1[1]-midpoint[1], point1[0]-midpoint[0])
+    angle2 = atan2(point2[1]-midpoint[1], point2[0]-midpoint[0])
+    angle3 = atan2(point3[1]-midpoint[1], point3[0]-midpoint[0])
+    angle4 = atan2(point4[1]-midpoint[1], point4[0]-midpoint[0])
+    sorted_indices = np.argsort([angle1, angle2, angle3, angle4])[::-1]
+    print([angle1, angle2, angle3, angle4], sorted_indices)
+    points_cw = np.array([point1, point2, point3, point4])[sorted_indices]
+    print(points_cw)
+    return points_cw
+
+def estimate_and_order(curr_2_points):
+    # estimates the 2 points on the other diagonal as rownumber, columnnumber
+    # and returns all the points arranged in Clock Wise order
     coords1 = [curr_2_points[1][1], -curr_2_points[1][0]]
     coords2 = [curr_2_points[0][1], -curr_2_points[0][0]]
     
@@ -76,10 +89,13 @@ def estimate_other_2_points(curr_2_points):
     other2_angle = curr_angle + pi/2#angle that the other diagonal makes with the x axis
     new_x = curr_midpoint[0] + half_dist * cos(other2_angle)
     new_y = curr_midpoint[1] + half_dist * sin(other2_angle)    
-    new_point2 = reflection_of_point([new_x, new_y], coords1, coords2)
+    new_point1_coords = [new_x, new_y]
+    new_point2_coords = reflection_of_point(new_point1_coords, coords1, coords2)    
     new_y *= -1 #converting back from coordinate system to row number
-    new_point1 = [int(new_y), int(new_x)]
-    return [new_point1, [-new_point2[1], new_point2[0]]]
+    new_point1_rowcol = [int(new_y), int(new_x)]
+    points_cw = order_CW(coords1, coords2, new_point1_coords, new_point2_coords, curr_midpoint)
+    points_cw = [[-points_cw[0][1], points_cw[0][0]], [-points_cw[1][1], points_cw[1][0]], [-points_cw[2][1], points_cw[2][0]], [-points_cw[3][1], points_cw[3][0]]]
+    return points_cw#[new_point1_rowcol, [-new_point2_coords[1], new_point2_coords[0]]]
 
 def get_corners(frames):
     corners = []
@@ -171,18 +187,17 @@ def get_corners(frames):
             approx_contour = cv2.approxPolyDP(tag_contour_points, hyp_param, False).squeeze().tolist()
             if (len(approx_contour)) != 2:
                 print('number of vertices:', len(approx_contour))
-            other2points = estimate_other_2_points(approx_contour)
-            approx_contour.append(other2points[0])
-            approx_contour.append(other2points[1])
-            corners.append(approx_contour)
-            for crnr in range(len(approx_contour)):
-                cv2.circle(img_erosion, tuple(approx_contour[crnr][::-1]), 15, (255,0,0))
+            points_cw = estimate_and_order(approx_contour)
+            corners.append(points_cw)
+            for crnr in range(len(points_cw)):
+                cv2.circle(img_erosion, tuple(points_cw[crnr][::-1]), 15, (255,0,0))
             cv2.imwrite('contours1/img_erosion{}.jpg'.format(frame_num), img_erosion)
             if debug:
                 cv2.imshow('contours/img_erosion{}.jpg'.format(frame_num), img_erosion)
                 cv2.waitKey(0)
                 cv2.destroyAllWindows()
     return corners
+
 
 if __name__ == '__main__':
     frames = read_video(vid_path)
