@@ -41,7 +41,8 @@ def euclidean_distance(point1, point2):
     assert (isinstance(point1, list) or isinstance(point1, np.ndarray)) and (isinstance(point2, list) or isinstance(point2, np.ndarray))
     return sqrt(np.sum(np.square(np.subtract(point1, point2))))
 
-def reflection_of_point(point, line_point1, line_point2):
+def reflection_of_point(point, line_point1, line_point2):#takes point, line_point1 & 2 represented in coordinate system (0th idx is column number of the pixel & 1st index is -row number)
+    #returns the reflectionin coordinate system. Have to convert it into row & column number b4 using
     a = line_point1[1] - line_point2[1]
     b = line_point2[0] - line_point1[0]
     c = -(a*line_point1[0] + b*line_point1[1])
@@ -95,8 +96,10 @@ def detect_corners(tag, rgb_tag):
     for i in range(1, 4): #selecting the line joining any 2 opposite corners & determining the agnle to be rotatted to make its angle=npi/4
         distances.append(euclidean_distance(corners4[0], corners4[i]))
     point1, point2 = corners4[0], corners4[np.argmax(distances)]
-    coords1 = [point1[0], -point1[1]]
-    coords2 = [point2[0], -point2[1]]
+    # coords1 = [point1[0], -point1[1]]
+    # coords2 = [point2[0], -point2[1]]
+    coords1 = [point1[1], -point1[0]]
+    coords2 = [point2[1], -point2[0]]
     angle = math.degrees(math.atan2((coords1[1]-coords2[1]), (coords1[0]-coords2[0])))
     angle_2_rotate = 45-angle
 
@@ -135,47 +138,20 @@ def warp(M, tag):
                 warp_tag[new_i, new_j] = tag[i, j]
     return warp_tag
 
+if __name__ == '__main__':
+    rgb_tag = cv2.imread(args.image)
+    tag = cv2.imread(args.image, 0)
+    corners, angle_2_rotate = detect_corners(tag, rgb_tag) #detect the 4 corners of the tag
+    M = cv2.getRotationMatrix2D((624/2, 624/2), angle_2_rotate, 1.0)
+    warp_tag = warp(M, tag)
+    # cv2.imshow('warp_tag', warp_tag)
+    # cv2.waitKey(0)
+    cv2.imwrite('warp_tag.jpg', warp_tag)
+    grid = obtain_grid(warp_tag)
+    id = grid_decode(grid, warp_tag)
+    print('id of the tag:', id)
+    print('Saved different stages of the solution!')
 
-rgb_tag = cv2.imread(args.image)
-tag = cv2.imread(args.image, 0)
-corners, angle_2_rotate = detect_corners(tag, rgb_tag) #detect the 4 corners of the tag
-M = cv2.getRotationMatrix2D((624/2, 624/2), angle_2_rotate, 1.0)
-warp_tag = warp(M, tag)
-# cv2.imshow('warp_tag', warp_tag)
-# cv2.waitKey(0)
-cv2.imwrite('warp_tag.jpg', warp_tag)
-grid = obtain_grid(warp_tag)
-id = grid_decode(grid, warp_tag)
-print('id of the tag:', id)
-print('Saved different stages of the solution!')
-
-# def homography(cam_corners):
-#     cam_corners = np.array(cam_corners)
-#     wrld_corners = np.array([[0,0], [8*cell_size-1,0], [0,8*cell_size-1], [8*cell_size-1,8*cell_size-1]])
-#     assert cam_corners.shape == wrld_corners.shape
-#     A = []
-#     for i in range(cam_corners.shape[0]):#x is col; y is row
-#         cam_x, cam_y = cam_corners[i]
-#         wrld_x, wrld_y = wrld_corners[i]
-#         A.append([-cam_x, -cam_y, -1, 0, 0, 0, wrld_x*cam_x, wrld_x*cam_y, wrld_x])
-#         A.append([0, 0, 0, -cam_x, -cam_y, -1, wrld_y*cam_x, wrld_y*cam_y, wrld_y])
-#     u, d, vt = np.linalg.svd(A)
-#     print(vt[-1].shape)
-#     h = vt[-1]
-#     H = h.reshape((3,3))
-#     H = H / H[2,2]
-#     return H
-
-# def Warp(src, H , dst):
-#     print(src.shape, dst.shape)
-#     for i in range(src.shape[0]):
-#         for j in range(src.shape[1]):
-#             x, y, z = H.dot(np.array([i, j, 1]))
-#             x = int(x/z)
-#             y = int(y/z)
-#             if (x>=0 and x<dst.shape[0]) and (y>=0 and y<dst.shape[1]):
-#                 dst[x, y] = src[i, j]
-#     return dst
 
 # H = homography(corners)
 # dest = np.zeros((cell_size*8, cell_size*8, 3),dtype = np.uint8)
