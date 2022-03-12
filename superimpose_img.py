@@ -3,13 +3,14 @@ import cv2
 import numpy as np
 import argparse
 #from detect_tag import detect_tag
-#from estimate_tag import reflection_of_point
+from estimate_tag import reflection_of_point, warp, angle_of_diagonal, obtain_grid, grid_decode
 from math import sqrt, atan2, degrees, pi, cos, sin
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--video', default='./1tagvideo.mp4', type=str)
 args = parser.parse_args()
 vid_path = args.video
+debug = False
 
 def read_video(vid_path):
     vidObj = cv2.VideoCapture(vid_path)
@@ -22,46 +23,50 @@ def read_video(vid_path):
         # if success:# and i>120:
         #     pass        
         #     #all_edges.append(detect_tag(frame))
-            # frames.append(frame)
-        if i==2:
+        #     frames.append(frame)
+        if i==0:
             #all_edges.append(detect_tag(frame))
             frames.append(frame)
+            #cv2.imshow('frame', frame)
+            #cv2.imwrite('frame.jpg', frame)
+            #cv2.waitKey(0)
             break
         i += 1
     print('read {} frames fromn video'.format(len(frames)))
     return frames
 
-debug = True
+def homography(wrld_corners):
+    
+    cam_corners = np.array(cam_corners)
+    # = np.array([[0,0], [8*cell_size-1,0], [0,8*cell_size-1], [8*cell_size-1,8*cell_size-1]])
+    assert cam_corners.shape == wrld_corners.shape
+    A = []
+    for i in range(cam_corners.shape[0]):#x is col; y is row
+        cam_x, cam_y = cam_corners[i]
+        wrld_x, wrld_y = wrld_corners[i]
+        A.append([-cam_x, -cam_y, -1, 0, 0, 0, wrld_x*cam_x, wrld_x*cam_y, wrld_x])
+        A.append([0, 0, 0, -cam_x, -cam_y, -1, wrld_y*cam_x, wrld_y*cam_y, wrld_y])
+    u, d, vt = np.linalg.svd(A)
+    print(vt[-1].shape)
+    h = vt[-1]
+    H = h.reshape((3,3))
+    H = H / H[2,2]
+    return H
 
 def euclidean_distance(point1, point2):
     assert (isinstance(point1, list) or isinstance(point1, np.ndarray)) and (isinstance(point2, list) or isinstance(point2, np.ndarray))
     return sqrt(np.sum(np.square(np.subtract(point1, point2))))
 
 def imshow_components(labels, unique_label):
-    # Map component labels to hue val
     label_hue = np.uint8(179*labels/np.max(labels))
     blank_ch = 255*np.ones_like(label_hue)
     labeled_img = cv2.merge([label_hue, blank_ch, blank_ch])
-
-    # cvt to BGR for display
     labeled_img = cv2.cvtColor(labeled_img, cv2.COLOR_HSV2BGR)
-
-    # set bg label to black
     labeled_img[label_hue==0] = 0
-
     cv2.imshow('label-{}'.format(unique_label), labeled_img)
-    #cv2.imwrite('label-{}.jpg'.format(unique_label), labeled_img)
     cv2.waitKey(0)
     cv2.destroyAllWindows()
 
-def reflection_of_point(point, line_point1, line_point2):#takes point, line_point1 & 2 represented in coordinate system (0th idx is column number of the pixel & 1st index is -row number)
-    #returns the reflectionin coordinate system. Have to convert it into row & column number b4 using
-    a = line_point1[1] - line_point2[1]
-    b = line_point2[0] - line_point1[0]
-    c = -(a*line_point1[0] + b*line_point1[1])
-    reflection_point = (np.array([[b**2 - a**2, -2 * a * b], [-2 * a * b, a**2 - b**2]]) @ point - 2 * c * np.array([a, b])) / (a**2 + b**2)
-    reflection_point = reflection_point.astype(int)
-    return reflection_point
 
 def order_CW(point1, point2, point3, point4, midpoint):#points are in XY coordinates (not row, column numbers)
     # returns points in coord system as well
@@ -70,9 +75,9 @@ def order_CW(point1, point2, point3, point4, midpoint):#points are in XY coordin
     angle3 = atan2(point3[1]-midpoint[1], point3[0]-midpoint[0])
     angle4 = atan2(point4[1]-midpoint[1], point4[0]-midpoint[0])
     sorted_indices = np.argsort([angle1, angle2, angle3, angle4])[::-1]
-    print([angle1, angle2, angle3, angle4], sorted_indices)
+    #print([angle1, angle2, angle3, angle4], sorted_indices)
     points_cw = np.array([point1, point2, point3, point4])[sorted_indices]
-    print(points_cw)
+    #print(points_cw)
     return points_cw
 
 def estimate_and_order(curr_2_points):
@@ -93,7 +98,7 @@ def estimate_and_order(curr_2_points):
     new_point2_coords = reflection_of_point(new_point1_coords, coords1, coords2)    
     new_y *= -1 #converting back from coordinate system to row number
     new_point1_rowcol = [int(new_y), int(new_x)]
-    points_cw = order_CW(coords1, coords2, new_point1_coords, new_point2_coords, curr_midpoint)
+    points_cw = order_CW(coords1, coords2, new_point1_coords, new_point2_coords, curr_midpoint).astype(int)
     points_cw = [[-points_cw[0][1], points_cw[0][0]], [-points_cw[1][1], points_cw[1][0]], [-points_cw[2][1], points_cw[2][0]], [-points_cw[3][1], points_cw[3][0]]]
     return points_cw#[new_point1_rowcol, [-new_point2_coords[1], new_point2_coords[0]]]
 
@@ -118,8 +123,6 @@ def get_corners(frames):
         minLineLength = 2
         maxLineGap = 100
         lines = cv2.HoughLinesP(img_erosion,1,np.pi/180,100,minLineLength,maxLineGap)
-        
-        print('Number of lines:', len(lines))
         if lines is not None:
             for x1,y1,x2,y2 in lines[0]:
                 cv2.line(img_erosion,(x1,y1),(x2,y2),(0,255,0),12)
@@ -148,7 +151,7 @@ def get_corners(frames):
         #imshow_components(labels, 'size_threshold')
 
         unique_labels = np.unique(labels)
-        print(num_labels, unique_labels, consider_labels)
+        #print(num_labels, unique_labels, consider_labels)
         if debug:
             imshow_components(labels, 'centroid_threshold')
 
@@ -198,8 +201,57 @@ def get_corners(frames):
                 cv2.destroyAllWindows()
     return corners
 
+def find_orientation_1st_frame(corners4, rgb_frame, frame_num):
+    angle = angle_of_diagonal(corners4)#returns the angle made by the left-tilted diagonal with +X cartesian axis
+    # due to the order followed while forming corners4, `angle` always lies b/w +90 to +180 degrees
+    gray_frame = cv2.cvtColor(rgb_frame, cv2.COLOR_BGR2GRAY)
+    # cell_size = int(euclidean_distance(corners4[0], corners4[1])/8)
+    center_of_rot = np.divide(np.add(corners4[0], corners4[2]), 2)
+    angle_cw = angle-45
+    M = cv2.getRotationMatrix2D(tuple(center_of_rot), angle_cw, 1.0)
+    warp_tag = warp(M, gray_frame, gray_frame.shape[0], gray_frame.shape[1])
+    # cv2.imwrite('q2a/warp_tag_{}.jpg'.format(frame_num), warp_tag)
+    # #cv2.imshow('warp_tag', warp_tag)
+    # #cv2.waitKey(0)
+    warped_corners4 = []
+    for crnr in range(len(corners4)):
+        new_i, new_j = M.dot(np.array([corners4[crnr][0], corners4[crnr][1], 1])).astype(int)
+        warped_corners4.append([new_i, new_j])
+    warped_corners4 = np.array(warped_corners4)
+    #print(warped_corners4)
+    #warped_corners4 = order_CW(warped_corners4[0], warped_corners4[1], warped_corners4[2], warped_corners4[3], center_of_rot)
+    #print(warped_corners4)
+    top, left = np.amin(warped_corners4, axis=0)#[np.max([warped_corners4[0][0], warped_corners4[1][0]]), np.max([warped_corners4[0][1], warped_corners4[2][1]])]
+    bottom, right = np.amax(warped_corners4, axis=0)#[np.min([warped_corners4[2][0], warped_corners4[3][0]]), np.min([warped_corners4[1][1], warped_corners4[3][1]])]
+    cropped_warp = warp_tag[top:bottom, left:right]
+    # cv2.imshow('cropped_warp', cropped_warp)
+    # cv2.waitKey(0)
+    grid = obtain_grid(cropped_warp)
+    id, num_acw_90_rots = grid_decode(grid, cropped_warp)
+    total_cw_rotation = angle_cw - (90 * num_acw_90_rots)
+    # M = cv2.getRotationMatrix2D(tuple(np.mean(warped_corners4, axis=0).astype(int)), total_cw_rotation, 1.0)
+    # cropped_warp_tag = warp(M, cropped_warp, cropped_warp.shape[0], cropped_warp.shape[1])
+    # cv2.imshow('q2a/warp_tag_{}.jpg'.format(frame_num), cropped_warp_tag)
+    # cv2.waitKey(0)
+
+
+    M = cv2.getRotationMatrix2D(tuple(center_of_rot), total_cw_rotation, 1.0)
+    warp_tag_final = warp(M, gray_frame, gray_frame.shape[0], gray_frame.shape[1])
+    cv2.imshow('warp_tag', warp_tag_final)
+    cv2.waitKey(0)
+    print('id of the tag:', id)
+    return total_cw_rotation
+
+
+#def find_orientation_rest_frames():
+
 
 if __name__ == '__main__':
     frames = read_video(vid_path)
-    corners = get_corners(frames)
-    
+    corners = get_corners(frames)#corners are sorted in CW order & first corner in each of the 1D lists is the one in Quadrant2 (when midpoint is the origin & X,Y axes directions are in the 2D-cartesian sense)
+    #print(corners)
+    testudo = cv2.imread('testudo.png')
+    next_angle = find_orientation_1st_frame(corners[0], frames[0], 0)
+    # for i in range(len(frames)):
+    #     prev_angle = next_angle
+    #     next_angle = find_orientation_rest_frames(corners[i], frames[i], i, prev_angle)
