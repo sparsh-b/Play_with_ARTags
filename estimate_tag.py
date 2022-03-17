@@ -9,11 +9,10 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--image', default='./rotated_image.jpg', type=str)
 args = parser.parse_args()
 
-cell_size = int(624/8) #assuming the image size is 624 based on the image given in pdf
 
 def obtain_grid(tag):
-    if cell_size != tag.shape[0]/8 or cell_size != tag.shape[1]/8:
-        tag = cv2.resize(tag, (8*cell_size, 8*cell_size),  interpolation = cv2.INTER_AREA)
+    if __name__ != '__main__':
+        cell_size = int(tag.shape[0]/8)
     tag = tag.astype(np.uint8)
     cells = np.ones([8, 8, cell_size, cell_size]).astype(np.uint8)
     grid = np.ones([8,8])
@@ -26,16 +25,18 @@ def obtain_grid(tag):
     return grid
 
 def grid_decode(grid, tag):
-    global gray_grid
+    num_rotations = 0
     while grid[5, 5] != 1:#rotate the matrix until bottom-right is white
         grid = np.rot90(grid)
         tag = np.rot90(tag)
+        num_rotations += 1
     grid = grid.astype(np.uint8)
     id_binary = '0b'+str(grid[3,3])+str(grid[3,4])+str(grid[4,4])+str(grid[4,3])
-    cv2.imwrite('upright_warp_tag.jpg', tag)
+    if __name__ == '__main__':
+        cv2.imwrite('upright_warp_tag.jpg', tag)
     # cv2.imshow('upright_warp_tag', tag)
     # cv2.waitKey(0)
-    return int(id_binary, 2)
+    return int(id_binary, 2), num_rotations
 
 def euclidean_distance(point1, point2):
     assert (isinstance(point1, list) or isinstance(point1, np.ndarray)) and (isinstance(point2, list) or isinstance(point2, np.ndarray))
@@ -50,14 +51,26 @@ def reflection_of_point(point, line_point1, line_point2):#takes point, line_poin
     reflection_point = reflection_point.astype(int)
     return reflection_point
 
+def angle_of_diagonal(corners4):
+    distances = [-1]
+    for i in range(1, 4): #selecting the line joining any 2 opposite corners & determining the agnle to be rotatted to make its angle=npi/4
+        distances.append(euclidean_distance(corners4[0], corners4[i]))
+    point1, point2 = corners4[0], corners4[np.argmax(distances)]
+    # coords1 = [point1[0], -point1[1]]
+    # coords2 = [point2[0], -point2[1]]
+    coords1 = [point1[1], -point1[0]]
+    coords2 = [point2[1], -point2[0]]
+    angle = math.degrees(math.atan2((coords1[1]-coords2[1]), (coords1[0]-coords2[0])))
+    return angle
+
 def detect_corners(tag, rgb_tag):
     corners = cv2.goodFeaturesToTrack(tag,20,0.01,10)
     corners = np.int0(corners)
     corners = np.squeeze(corners)
     corners10 = []
-    assert tag.shape[0] == cell_size*8 and tag.shape[1] == cell_size*8
     center = [cell_size*4, cell_size*4]
-    delta = 20
+    delta = .20*cell_size
+    print('cell_size, delta', cell_size, delta)
     for corner in corners:
         if euclidean_distance(corner, center) > sqrt(2)*cell_size-delta and euclidean_distance(corner, center) < 2*sqrt(2)*cell_size+delta:
             corners10.append(corner.tolist())
@@ -67,7 +80,6 @@ def detect_corners(tag, rgb_tag):
         ref_point = corners10[0]
         group = [ref_point]
         corners10.pop(0)
-        indx_to_remove = []
 
         for i in range(len(corners10)):
             if euclidean_distance(corners10[i], ref_point) <= sqrt(2)*cell_size+delta:
@@ -92,31 +104,19 @@ def detect_corners(tag, rgb_tag):
         else:
             corners4.append(group[0])
     
-    distances = [-1]
-    for i in range(1, 4): #selecting the line joining any 2 opposite corners & determining the agnle to be rotatted to make its angle=npi/4
-        distances.append(euclidean_distance(corners4[0], corners4[i]))
-    point1, point2 = corners4[0], corners4[np.argmax(distances)]
-    # coords1 = [point1[0], -point1[1]]
-    # coords2 = [point2[0], -point2[1]]
-    coords1 = [point1[1], -point1[0]]
-    coords2 = [point2[1], -point2[0]]
-    angle = math.degrees(math.atan2((coords1[1]-coords2[1]), (coords1[0]-coords2[0])))
+    angle = angle_of_diagonal(corners4)
     angle_2_rotate = 45-angle
 
     tag_corners =copy.copy(rgb_tag)
     for i in corners:
         x,y = i
         cv2.circle(tag_corners,(x,y),5,(0,0,255),-1)
-    # # cv2.imshow('corners', tag_corners)
-    # # cv2.waitKey(0)
     cv2.imwrite('corners_all.jpg', tag_corners)
 
     tag_corners10 =copy.copy(rgb_tag)
     for i in corners10_bckp:
         x,y = i
         cv2.circle(tag_corners10,(x,y),5,(0,0,255),-1)
-    # # cv2.imshow('corners', tag_corners)
-    # # cv2.waitKey(0)
     cv2.imwrite('corners10.jpg', tag_corners10)
 
     print('4 corners of the tag:')
@@ -124,33 +124,48 @@ def detect_corners(tag, rgb_tag):
         print(i)
         x,y = i
         cv2.circle(rgb_tag,(x,y),5,(0,0,255),-1)
-    # cv2.imshow('corners', rgb_tag)
-    # cv2.waitKey(0)
     cv2.imwrite('corners4.jpg', rgb_tag)
     return corners4, angle_2_rotate
 
-def warp(M, tag):
-    warp_tag = np.zeros((624, 624),dtype = np.uint8)
-    for i in range(624):
-        for j in range(624):
+def warp(M, tag, num_rows, num_cols, num_channels=1):
+    if num_channels == 1:
+        warp_tag = np.zeros((num_rows, num_cols),dtype = np.uint8)
+    else:
+        warp_tag = np.zeros((num_rows, num_cols, num_channels),dtype = np.uint8)
+    for i in range(num_rows):
+        for j in range(num_cols):
             new_i, new_j = M.dot(np.array([i,j,1])).astype(int)
-            if (new_i >=0 and new_i<624) and (new_j>=0 and new_j<624):
+            #print(i, j, new_i, new_j)
+            if (new_i >=0 and new_i<num_rows) and (new_j>=0 and new_j<num_cols):
                 warp_tag[new_i, new_j] = tag[i, j]
     return warp_tag
+
+def decode_tag(tag, rgb_tag, cellsize):
+    global cell_size
+    cell_size = cellsize
+    corners, angle_2_rotate = detect_corners(tag, rgb_tag) #detect the 4 corners of the tag
+    print('angle_2_rotate', angle_2_rotate)
+    M = cv2.getRotationMatrix2D((cell_size*8/2, cell_size*8/2), angle_2_rotate, 1.0)
+    warp_tag = warp(M, tag, cell_size*8, cell_size*8)
+    # cv2.imshow('warp_tag', warp_tag)
+    # cv2.waitKey(0)
+    if __name__ == '__main__':
+        cv2.imwrite('warp_tag.jpg', warp_tag)
+    grid = obtain_grid(warp_tag)
+    id, num_90_rotations = grid_decode(grid, warp_tag)
+    print('id of the tag:', id)
+    if __name__ == '__main__':
+        print('Saved different stages of the solution!')
+    return angle_2_rotate + num_90_rotations*90
 
 if __name__ == '__main__':
     rgb_tag = cv2.imread(args.image)
     tag = cv2.imread(args.image, 0)
-    corners, angle_2_rotate = detect_corners(tag, rgb_tag) #detect the 4 corners of the tag
-    M = cv2.getRotationMatrix2D((624/2, 624/2), angle_2_rotate, 1.0)
-    warp_tag = warp(M, tag)
-    # cv2.imshow('warp_tag', warp_tag)
-    # cv2.waitKey(0)
-    cv2.imwrite('warp_tag.jpg', warp_tag)
-    grid = obtain_grid(warp_tag)
-    id = grid_decode(grid, warp_tag)
-    print('id of the tag:', id)
-    print('Saved different stages of the solution!')
+    cell_size = int(624/8) #assuming the image size is 624 based on the image given in pdf
+    if cell_size != tag.shape[0]/8 or cell_size != tag.shape[1]/8:
+        tag = cv2.resize(tag, (8*cell_size, 8*cell_size),  interpolation = cv2.INTER_AREA)
+        rgb_tag = cv2.resize(rgb_tag, (8*cell_size, 8*cell_size),  interpolation = cv2.INTER_AREA)
+    _ = decode_tag(tag, rgb_tag, cell_size)
 
 
 # H = homography(corners)
